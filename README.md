@@ -81,6 +81,8 @@ This page includes:
 You can access it like:  
 👉 `https://yourdomain.com/speakerbot/?token=start123`
 
+This URL can be used in Streambuddy etc. so the TTS will be played on your phone or on your bluetooth speaker.
+
 ---
 
 ## 🔊 How it works
