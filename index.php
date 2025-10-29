@@ -1,6 +1,6 @@
 <?php
 $token = $_GET['token'] ?? '';
-$validToken = 'start123';
+$validToken = 'rPx2Gb0FaDHozO0SDOSEvEJPukFtLmMTGmTuPCIWgPPaQHztXAlPWlo2RU2zh3cU';
 
 if ($token !== $validToken) {
     http_response_code(403);
