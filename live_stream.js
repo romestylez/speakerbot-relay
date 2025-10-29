@@ -10,25 +10,61 @@ const audioDevice = 'audio=Hi-Fi Cable Output (VB-Audio Hi-Fi Cable)';
 let clients = [];
 let ffmpegProcess = null;
 
-// --- Helper function: cleanly disconnect all clients ---
+// --- Timestamp Helper ---
+function ts() {
+  return new Date().toISOString().replace('T', ' ').split('.')[0];
+}
+
+// --- Restart Control ---
+let restarting = false;
+let restartAttempts = 0;
+const MAX_RESTART_ATTEMPTS = 5;
+const RESTART_DELAY_MS = 5000;
+
+// --- Helper: Disconnect all clients ---
 function disconnectAllClients(reason = 'unknown') {
   if (clients.length > 0)
-    console.log(`❌ Disconnecting ${clients.length} client(s) (${reason})...`);
-  clients.forEach(res => {
-    try { res.end(); } catch {}
+    console.log(`[${ts()}] ❌ Disconnecting ${clients.length} client(s) (${reason})...`);
+  clients.forEach(entry => {
+    try { entry.res.end(); } catch {}
   });
   clients = [];
 }
 
+// --- Safe FFmpeg restart ---
+function scheduleRestart(reason = 'unknown') {
+  if (restarting) return;
+  restarting = true;
+  restartAttempts++;
+
+  console.warn(`[${ts()}] ⚠️ FFmpeg exited – scheduling restart (${restartAttempts}/${MAX_RESTART_ATTEMPTS}) [${reason}]`);
+
+  if (restartAttempts > MAX_RESTART_ATTEMPTS) {
+    console.error(`[${ts()}] 🚨 Too many restart attempts, waiting 1 minute before retry...`);
+    restartAttempts = 0;
+    setTimeout(() => {
+      restarting = false;
+      startFFmpeg();
+    }, 60000);
+    return;
+  }
+
+  setTimeout(() => {
+    restarting = false;
+    startFFmpeg();
+  }, RESTART_DELAY_MS);
+}
+
 // --- Start or restart FFmpeg process ---
 function startFFmpeg() {
-  console.log('[INFO] Starting FFmpeg audio capture...');
+  console.log(`[${ts()}] [INFO] Starting FFmpeg audio capture...`);
 
-  // Stop any previous instance and disconnect clients
-  disconnectAllClients('FFmpeg restart');
   if (ffmpegProcess) {
     try { ffmpegProcess.kill('SIGKILL'); } catch {}
+    ffmpegProcess = null;
   }
+
+  disconnectAllClients('FFmpeg restart');
 
   ffmpegProcess = spawn(ffmpegPath, [
     '-f', 'dshow',
@@ -43,30 +79,29 @@ function startFFmpeg() {
     'pipe:1'
   ]);
 
-  // Forward FFmpeg output to all connected clients
   ffmpegProcess.stdout.on('data', chunk => {
-    clients.forEach(res => res.write(chunk));
+    restartAttempts = 0;
+    clients.forEach(entry => entry.res.write(chunk));
   });
 
-  // Log only relevant FFmpeg errors
   ffmpegProcess.stderr.on('data', data => {
     const msg = data.toString();
     if (msg.toLowerCase().includes('error') || msg.includes('failed')) {
-      console.error('[FFMPEG]', msg.trim());
+      console.error(`[${ts()}] [FFMPEG] ${msg.trim()}`);
     }
   });
 
-  // When FFmpeg exits → reset everything and restart
   ffmpegProcess.on('close', code => {
-    console.log(`⚠️ FFmpeg exited (Code ${code})`);
+    console.warn(`[${ts()}] ⚠️ FFmpeg exited (code=${code})`);
     disconnectAllClients('FFmpeg stopped');
-    console.log('🔁 Restarting FFmpeg in 5 seconds...');
-    setTimeout(startFFmpeg, 5000);
+    scheduleRestart(`exit code ${code}`);
   });
 }
 
 // --- Audio stream endpoint ---
 app.get('/live.mp3', (req, res) => {
+  const clientIP = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+
   res.writeHead(200, {
     'Content-Type': 'audio/mpeg',
     'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
@@ -75,32 +110,32 @@ app.get('/live.mp3', (req, res) => {
     'Connection': 'close'
   });
 
-  clients.push(res);
-  console.log(`🔊 Client connected (${clients.length})`);
+  clients.push({ res, clientIP });
+  console.log(`[${ts()}] 🔊 Client connected (${clients.length}) - IP: ${clientIP}`);
 
   req.on('close', () => {
-    clients = clients.filter(c => c !== res);
-    console.log(`❌ Client disconnected (${clients.length})`);
+    clients = clients.filter(c => c.res !== res);
+    console.log(`[${ts()}] ❌ Client disconnected (${clients.length}) - IP: ${clientIP}`);
   });
 });
 
 // --- Start Express server ---
 app.listen(PORT, () => {
-  console.log(`🎧 Live stream running at http://127.0.0.1:${PORT}/live.mp3`);
+  console.log(`[${ts()}] 🎧 Live stream running at http://127.0.0.1:${PORT}/live.mp3`);
 });
 
 // --- Start initial FFmpeg capture ---
 startFFmpeg();
 
-// --- Safety restart every 6 hours (prevents memory leaks) ---
+// --- Routine restart every 6h to prevent memory leaks ---
 setInterval(() => {
-  console.log('♻️ Routine FFmpeg restart...');
+  console.log(`[${ts()}] ♻️ Routine FFmpeg restart...`);
   startFFmpeg();
 }, 6 * 60 * 60 * 1000);
 
-// --- Graceful shutdown on Ctrl+C ---
+// --- Graceful shutdown ---
 process.on('SIGINT', () => {
-  console.log('\n🧹 Stopping service...');
+  console.log(`\n[${ts()}] 🧹 Stopping service...`);
   disconnectAllClients('Manual stop');
   if (ffmpegProcess) ffmpegProcess.kill('SIGKILL');
   process.exit(0);
