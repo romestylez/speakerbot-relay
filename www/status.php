@@ -67,6 +67,26 @@ if ($action === 'replay') {
 }
 
 // ──────────────────────────────
+// .bak-Verzeichnis komplett löschen
+// ──────────────────────────────
+if ($action === 'clearbak') {
+    $bakDir = $ttsFolder . "/.bak";
+    $deleted = 0;
+    if (is_dir($bakDir)) {
+        foreach (glob($bakDir . "/*", GLOB_NOSORT) as $f) {
+            if (is_file($f)) {
+                @unlink($f);
+                $deleted++;
+            }
+        }
+    }
+    header('Content-Type: application/json');
+    echo json_encode(['ok' => true, 'deleted' => $deleted]);
+    exit;
+}
+
+
+// ──────────────────────────────
 // Daten vom Node-Server holen
 // ──────────────────────────────
 $apiUrl = "http://127.0.0.1:{$apiPort}/speakerbot/status?token=$token";
@@ -241,6 +261,12 @@ if (isset($_GET['mode']) && $_GET['mode'] === 'json') {
   </div>
 </div>
 
+<div class="controls" style="margin-top:20px;">
+  <button id="clearBakBtn" style="background:#f33;color:#fff;border:none;border-radius:6px;padding:8px 16px;cursor:pointer;font-weight:bold;">
+    🗑️ Delete .bak Files
+  </button>
+</div>
+
 </div>
 
 <script>
@@ -292,6 +318,22 @@ async function loadBakFiles() {
     sel.innerHTML = '<option>Fehler beim Laden</option>';
   }
 }
+
+  const clearBtn = document.getElementById('clearBakBtn');
+  if (clearBtn) {
+    clearBtn.addEventListener('click', async () => {
+      if (!confirm("Delete all Replay files")) return;
+      try {
+        const res = await fetch(`status.php?token=<?= $token ?>&action=clearbak`, { cache: "no-store" });
+        const data = await res.json();
+        alert(`🗑️ Deleted ${data.deleted} file(s).`);
+        loadBakFiles();
+      } catch (err) {
+        alert("❌ Error deleting .bak files");
+      }
+    });
+  }
+
 
 document.addEventListener("DOMContentLoaded", () => {
   const playBtn = document.getElementById('bakPlayBtn');

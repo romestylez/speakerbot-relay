@@ -172,7 +172,7 @@ latestFile = files.length ? files[0].f : null;
 // ───────────────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
   console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-  console.log("✅ Speakerbot MP3 aktiv (ohne FFmpeg)");
+  console.log("✅ Speakerbot Relay");
   console.log(`URL: /speakerbot/?token=${VALID_TOKEN}`);
   console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 });
