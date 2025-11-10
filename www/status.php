@@ -1,27 +1,28 @@
 <?php
 // ──────────────────────────────────────────────────────────────
-// .env manuell laden (liegt eine Ebene über "www")
+// .env laden
 // ──────────────────────────────────────────────────────────────
 $envPath = realpath(__DIR__ . '/../.env');
 if ($envPath && file_exists($envPath)) {
     $lines = file($envPath, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
     foreach ($lines as $line) {
         $line = trim($line);
-        if ($line === '' || $line[0] === '#') continue; // Kommentare/Leerzeilen
+        if ($line === '' || $line[0] === '#') continue;
         [$key, $value] = array_map('trim', explode('=', $line, 2));
         $_ENV[$key] = $value;
     }
 }
 
 // ──────────────────────────────────────────────────────────────
-// Konfiguration aus .env mit Defaults
+// Konfiguration
 // ──────────────────────────────────────────────────────────────
-$validToken  = $_ENV['VALID_TOKEN']  ?? '';
-$ttsFolder   = rtrim($_ENV['TTS_FOLDER']  ?? 'D:/OBS-LIVE/Tools/TTS-Relay-Server/mp3', '/\\');
-$stateFile   = $_ENV['STATE_FILE']   ?? 'D:/OBS-LIVE/Tools/TTS-Relay-Server/state.json';
-$apiPort     = (int)($_ENV['PORT']   ?? 8773);
-$cleanupDays = (int)($_ENV['CLEANUP_DAYS'] ?? 1);
+$validToken     = $_ENV['VALID_TOKEN']  ?? '';
+$ttsFolder      = rtrim($_ENV['TTS_FOLDER']  ?? 'D:/OBS-LIVE/Tools/TTS-Relay-Server/mp3', '/\\');
+$stateFile      = $_ENV['STATE_FILE']   ?? 'D:/OBS-LIVE/Tools/TTS-Relay-Server/state.json';
+$apiPort        = (int)($_ENV['PORT']   ?? 8773);
+$cleanupDays    = (int)($_ENV['CLEANUP_DAYS'] ?? 1);
 $cleanupEnabled = (($_ENV['CLEANUP_ENABLED'] ?? '1') === '1');
+$logFile        = dirname($ttsFolder) . '/log/tts_log.json';
 
 // ──────────────────────────────────────────────────────────────
 // Zugriff prüfen
@@ -33,51 +34,56 @@ if ($token !== $validToken) {
     exit;
 }
 
+$action = $_GET['action'] ?? '';
+
 // ──────────────────────────────
-// Pause / Resume Zustand
+// Server-Log laden / löschen
+// ──────────────────────────────
+if ($action === 'getlog') {
+    header('Content-Type: application/json');
+    echo file_exists($logFile) ? file_get_contents($logFile) : json_encode([]);
+    exit;
+}
+if ($action === 'clearlog') {
+    @file_put_contents($logFile, json_encode([]));
+    header('Content-Type: application/json');
+    echo json_encode(['ok' => true]);
+    exit;
+}
+
+// ──────────────────────────────
+// Pause / Resume
 // ──────────────────────────────
 if (!file_exists($stateFile)) {
     @file_put_contents($stateFile, json_encode(['paused' => false]));
 }
-
-$action = $_GET['action'] ?? '';
 if ($action === 'pause' || $action === 'resume') {
     $paused = ($action === 'pause');
     @file_put_contents($stateFile, json_encode(['paused' => $paused]));
-    header("Location: status.php?token=$token"); // zurück zur Statusseite
+    header("Location: status.php?token=$token");
     exit;
 }
 
 // ──────────────────────────────
-// Replay: .bak → mp3 verschieben (mit REPLAY_-Prefix)
+// Replay & .bak Verwaltung
 // ──────────────────────────────
 if ($action === 'replay') {
     $file = basename($_GET['file'] ?? '');
-    if ($file === '') { http_response_code(400); exit('Missing file'); }
-
+    if (!$file) { http_response_code(400); exit('Missing file'); }
     $src = $ttsFolder . "/.bak/" . $file;
     if (!is_file($src)) { http_response_code(404); exit('Not found'); }
-
     $dst = $ttsFolder . "/REPLAY_" . $file;
     if (!@rename($src, $dst)) { http_response_code(500); exit('Move failed'); }
-
     header('Content-Type: application/json');
     echo json_encode(['ok' => true, 'file' => basename($dst)]);
     exit;
 }
-
-// ──────────────────────────────
-// .bak-Verzeichnis komplett löschen
-// ──────────────────────────────
 if ($action === 'clearbak') {
     $bakDir = $ttsFolder . "/.bak";
     $deleted = 0;
     if (is_dir($bakDir)) {
         foreach (glob($bakDir . "/*", GLOB_NOSORT) as $f) {
-            if (is_file($f)) {
-                @unlink($f);
-                $deleted++;
-            }
+            if (is_file($f)) { @unlink($f); $deleted++; }
         }
     }
     header('Content-Type: application/json');
@@ -85,48 +91,32 @@ if ($action === 'clearbak') {
     exit;
 }
 
-
 // ──────────────────────────────
-// Daten vom Node-Server holen
+// Node-Status laden
 // ──────────────────────────────
 $apiUrl = "http://127.0.0.1:{$apiPort}/speakerbot/status?token=$token";
-$json = @file_get_contents($apiUrl);
+$json   = @file_get_contents($apiUrl);
 $status = json_decode($json, true);
 
-// Pause-Status laden
 $state = json_decode(@file_get_contents($stateFile), true);
 if (!is_array($status)) $status = [];
 $status['paused'] = $state['paused'] ?? false;
 
 // ──────────────────────────────
-// Automatische Aufräumroutine (.bak)
+// .bak Aufräumen
 // ──────────────────────────────
 if ($cleanupEnabled) {
     $bakDir = $ttsFolder . "/.bak";
     if (is_dir($bakDir)) {
         $now = time();
-        $deletedCount = 0;
         foreach (glob($bakDir . "/*.{mp3,wav}", GLOB_BRACE) as $f) {
-            $ageDays = ($now - filemtime($f)) / 86400;
-            if ($ageDays > $cleanupDays) {
-                @unlink($f);
-                $deletedCount++;
-            }
-        }
-        if ($deletedCount > 0) {
-            error_log("🧹 .bak-Aufräumroutine: $deletedCount alte Dateien entfernt");
+            if ((($now - filemtime($f)) / 86400) > $cleanupDays) @unlink($f);
         }
     }
 }
 
-// JSON/Text-Modus
-if (isset($_GET['mode']) && $_GET['mode'] === 'text') {
-    $clients = $status['clients_count'] ?? 0;
-    echo $clients > 0 ? "🟢 Aktiv - Verbundene Clients: $clients" : "🔴 Keine Clients verbunden";
-    exit;
-}
-
-// .bak-Liste abrufen
+// .bak-Liste (JSON)
+// ─────────────────
 if (isset($_GET['list']) && $_GET['list'] === 'bak') {
     $bakDir = $ttsFolder . "/.bak";
     $files = [];
@@ -134,14 +124,15 @@ if (isset($_GET['list']) && $_GET['list'] === 'bak') {
         foreach (glob($bakDir . "/*.{mp3,wav}", GLOB_BRACE) as $f) {
             $files[] = basename($f);
         }
-        usort($files, fn($a, $b) => filemtime("$bakDir/$b") <=> filemtime("$bakDir/$a"));
+        usort($files, fn($a,$b)=>filemtime("$bakDir/$b")<=>filemtime("$bakDir/$a")); // neueste zuerst
     }
     header('Content-Type: application/json');
     echo json_encode($files);
     exit;
 }
 
-// JSON-Modus (Standard)
+// Status (JSON)
+// ─────────────
 if (isset($_GET['mode']) && $_GET['mode'] === 'json') {
     header('Content-Type: application/json');
     echo json_encode($status);
@@ -154,66 +145,98 @@ if (isset($_GET['mode']) && $_GET['mode'] === 'json') {
 <meta charset="utf-8">
 <title>🎧 Speakerbot Live-Status</title>
 <style>
-  body {
-    background:#000;
-    color:#0f0;
-    font-family:Consolas,"Courier New",monospace;
-    display:flex;
-    justify-content:center;
-    align-items:center;
-    height:100vh;
-    margin:0;
-  }
-  .box {
-    border:1px solid #0f0;
-    padding:25px 35px;
-    border-radius:10px;
-    box-shadow:0 0 6px #0f0;
-    min-width:450px;
-  }
-  h2 { font-size:26px; margin-bottom:20px; text-align:center; }
-  table { width:100%; border-collapse:collapse; margin-top:10px; font-size:16px; }
-  th { text-align:left; border-bottom:1px solid #0f0; padding-bottom:6px; }
-  td { padding:4px 0; }
-  .item { font-size:18px; margin:10px 0; display:flex; align-items:center; gap:10px; }
-  .label { font-weight:bold; }
-  .ok { color:#0f0; text-shadow:0 0 6px #0f0; }
-  .bad { color:#f33; text-shadow:0 0 6px #f00; }
-  .disc { color:#ff9900; text-shadow:0 0 6px #ff9900; }
-  .controls { text-align:center; margin-top:15px; }
-  .btn {
-    display:inline-block;
-    padding:8px 18px;
-    margin:4px;
-    border:none;
-    border-radius:6px;
-    font-size:16px;
-    font-weight:bold;
-    cursor:pointer;
-    text-decoration:none;
-  }
-  .pause { background:#ff0; color:#000; }
-  .resume { background:#0f0; color:#000; }
+body {
+  background:#000; color:#0f0; font-family:Consolas,"Courier New",monospace;
+  display:flex; justify-content:center; align-items:center; height:100vh; margin:0;
+}
+.box { border:1px solid #0f0; padding:25px 35px; border-radius:10px; box-shadow:0 0 6px #0f0; min-width:700px; text-align:center; }
+h2 { margin-bottom:20px; }
+a { text-decoration:none; }
+.item { font-size:18px; margin:10px 0; display:flex; justify-content:center; align-items:center; gap:10px; }
+.ok { color:#0f0; } .bad{color:#f33;} .disc{color:#ff9900;}
+.btn { display:inline-block; padding:8px 18px; margin:6px; border:none; border-radius:6px; font-weight:bold; cursor:pointer; }
+.pause{ background:#ff0; color:#000; } .resume{ background:#0f0; color:#000; }
+
+table { width:100%; border-collapse:collapse; margin-top:12px; font-size:16px; }
+th { text-align:left; border-bottom:1px solid #0f0; padding-bottom:6px; }
+td { padding:6px 0; }
+
+.replay-button button {
+  background:linear-gradient(90deg,#0f0,#4dff4d); color:#000; border:none; font-weight:bold;
+  border-radius:6px; padding:7px 14px; cursor:pointer; transition:all .25s ease; width:220px;
+}
+.replay-button button:hover { transform:scale(1.05); box-shadow:0 0 12px #4dff4d; }
+
+.select {
+  margin:10px 0; padding:6px 10px; border:1px solid #0f0; background:#000; color:#0f0; border-radius:6px; width:380px;
+}
+.logbox {
+  margin-top:10px;
+  background:#111;
+  color:#0f0;
+  padding:10px;
+  border:1px solid #0f0;
+  border-radius:8px;
+  max-height:250px;
+  overflow-y:auto;
+  font-size:14px;
+  line-height:1.3;              /* kompakter */
+  white-space:normal !important;/* ✅ erlaubt Umbrüche überall */
+  word-break:break-all;         /* ✅ bricht lange Wörter (Dateinamen) */
+  overflow-wrap:anywhere;       /* ✅ moderne Browser */
+  box-sizing:border-box;
+}
+/* Begrenzung und zentrierte Tabelle */
+.box {
+  max-width: 750px;           /* verhindert "über die ganze Seite" */
+  margin: 0 auto;             /* mittig ausrichten */
+}
+
+/* Tabelle auf Box-Breite beschränken */
+#clientTable {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+/* Einheitliche Spaltenbreite + saubere Ausrichtung */
+#clientTable th,
+#clientTable td {
+  text-align: center;
+  padding: 6px 0;
+  white-space: nowrap;
+}
+
+#clientTable th:nth-child(1),
+#clientTable td:nth-child(1) {
+  width: 35%;
+  text-align: left;
+  padding-left: 15px;
+}
+
+#clientTable th:nth-child(2),
+#clientTable td:nth-child(2) {
+  width: 30%;
+  text-align: center;
+}
+
+#clientTable th:nth-child(3),
+#clientTable td:nth-child(3) {
+  width: 35%;
+  text-align: right;
+  padding-right: 15px;
+}
+
+
+
 </style>
 </head>
-
 <body>
 <div class="box">
   <h2>🎧 Speakerbot Live-Status</h2>
 
-<?php if(!$status || isset($status['error'])): ?>
-  <div class="item bad">❌ Verbindung zum Audio-Server verloren!</div>
-<?php else: ?>
-  <div class="item">
-    🔊 <span class="label">Clients verbunden:</span>
-    <span id="clientCount"><?= $status['clients_count'] ?? 0 ?></span>
-  </div>
-
-  <div class="item">
-    🕹️ <span class="label">Status:</span>
-    <span id="playState"><?= $status['paused'] ? "⏸️ Pausiert" : "▶️ Aktiv" ?></span>
-  </div>
-
+  <div class="item">🔊 <b>Clients:</b> <span id="clientCount"><?= $status['clients_count'] ?? 0 ?></span></div>
+  <div class="item">🕹️ <b>Status:</b> <span id="playState"><?= $status['paused'] ? "⏸️ Pausiert" : "▶️ Aktiv" ?></span></div>
   <div class="controls">
     <?php if($status['paused']): ?>
       <a href="?token=<?= $token ?>&action=resume" class="btn resume">▶️ Start</a>
@@ -222,144 +245,182 @@ if (isset($_GET['mode']) && $_GET['mode'] === 'json') {
     <?php endif; ?>
   </div>
 
-  <?php if (!empty($status['clients'])): ?>
-  <table>
-    <tr><th>IP</th><th>Status</th><th>Letzte Aktivität</th></tr>
-    <?php foreach($status['clients'] as $c):
-      $ago = intval($c['lastSeenAgoSec']);
-      $isActive = $c['connected'];
-      $showTime = $ago > 5;
-      $timeFormatted = "";
-      if ($showTime) {
-          if ($ago >= 60) {
-              $m = floor($ago/60);
-              $s = $ago%60;
-              $timeFormatted = "{$m}m {$s}s";
-          } else $timeFormatted = "{$ago}s";
-      }
-      if ($isActive) {
-          if ($ago <= 5) { $statusText='🟢 aktiv'; $statusClass='ok'; }
-          else { $statusText='🟠 inaktiv'; $statusClass='disc'; }
-      } else { $statusText='🔴 getrennt'; $statusClass='bad'; }
-    ?>
-    <tr>
-      <td><?= htmlspecialchars($c['ip']) ?></td>
-      <td class="<?= $statusClass ?>"><?= $statusText ?></td>
-      <td class="<?= $showTime ? $statusClass : '' ?>"><?= $timeFormatted ?></td>
-    </tr>
-    <?php endforeach; ?>
+  <!-- Clients-Tabelle -->
+  <table id="clientTable">
+    <thead>
+      <tr><th>IP</th><th>Status</th><th>Letzte Aktivität</th></tr>
+    </thead>
+    <tbody></tbody>
   </table>
-  <?php endif; ?>
-<?php endif; ?>
 
-<hr style="margin:20px 0; border-color:#0f0;">
-<div class="item" style="flex-direction:column;align-items:flex-start;">
-  <div>🔁 <span class="label">TTS erneut abspielen:</span></div>
-  <div style="margin-top:6px;">
-    <select id="bakSelect" style="background:#000;color:#0f0;border:1px solid #0f0;padding:4px 8px;border-radius:6px;width:100%;max-width:320px;"></select>
-    <button id="bakPlayBtn" style="margin-top:8px;background:#000;color:#0f0;border:1px solid #0f0;border-radius:6px;padding:4px 8px;cursor:pointer;width:100%;max-width:320px;">▶️ Abspielen</button>
+  <hr style="margin:20px 0;border-color:#0f0;">
+
+  <!-- Replay -->
+  <div class="item" style="flex-direction:column;align-items:center;">
+    <b>🔁 TTS erneut abspielen:</b>
+    <select id="bakSelect" class="select"></select>
+    <div class="replay-button"><button id="bakPlayBtn">▶️ Abspielen</button></div>
+  </div>
+
+  <div class="controls" style="margin-top:20px;">
+    <button id="clearBakBtn" style="background:#f33;color:#fff;border:none;border-radius:6px;padding:8px 16px;cursor:pointer;font-weight:bold;">🗑️ Delete Replay Files</button>
+  </div>
+
+  <!-- Log -->
+  <hr style="margin:25px 0;border-color:#0f0;">
+  <div style="text-align:left;">
+    <div style="display:flex;justify-content:space-between;align-items:center;">
+      <b>📜 Wiedergabe-Log (Server)</b>
+      <button id="clearServerLogBtn" style="background:#333;color:#0f0;border:1px solid #0f0;border-radius:6px;padding:4px 10px;cursor:pointer;">🧹 Log löschen</button>
+    </div>
+    <div id="serverLogBox" class="logbox"><i>Lade Logdaten…</i></div>
   </div>
 </div>
 
-<div class="controls" style="margin-top:20px;">
-  <button id="clearBakBtn" style="background:#f33;color:#fff;border:none;border-radius:6px;padding:8px 16px;cursor:pointer;font-weight:bold;">
-    🗑️ Delete Replay Files
-  </button>
-</div>
-
-</div>
-
 <script>
-async function updateStatus() {
-  try {
-    const res = await fetch("status.php?token=<?= $token ?>&mode=json",{cache:"no-store"});
-    const data = await res.json();
-    if (!data) return;
+const token = "<?= $token ?>";
 
-    const cc=document.getElementById('clientCount');
-    if(cc) cc.textContent=data.clients_count;
-
-    const ps=document.getElementById('playState');
-    if(ps) ps.textContent=data.paused ? "⏸️ Pausiert" : "▶️ Aktiv";
-
-    const table=document.querySelector("table");
-    if(!table) return;
-    table.querySelectorAll("tr:not(:first-child)").forEach(tr=>tr.remove());
-
-    if(data.clients){
-      data.clients.forEach(c=>{
-        const ago=parseInt(c.lastSeenAgoSec);
-        const showTime=ago>5;
-        let cls="bad", st="🔴 getrennt";
-        if(c.connected){
-          if(ago<=5){cls="ok";st="🟢 aktiv";}
-          else{cls="disc";st="🟠 inaktiv";}
-        }
-        const tf=showTime?(ago>=60?`${Math.floor(ago/60)}m ${ago%60}s`:`${ago}s`):"";
-        const tr=document.createElement("tr");
-        tr.innerHTML=`<td>${c.ip}</td><td class="${cls}">${st}</td><td class="${showTime?cls:""}">${tf}</td>`;
-        table.appendChild(tr);
-      });
+// ───────── Clients live updaten (inkl. IP & Last Seen)
+function renderClients(clients){
+  const tbody = document.querySelector("#clientTable tbody");
+  tbody.innerHTML = "";
+  if(!Array.isArray(clients)) return;
+  clients.forEach(c=>{
+    const ago = parseInt(c.lastSeenAgoSec);
+    const showTime = ago > 5;
+    let cls="bad", st="🔴 getrennt";
+    if(c.connected){
+      if(ago<=5){cls="ok";st="🟢 aktiv";}
+      else{cls="disc";st="🟠 inaktiv";}
     }
-  }catch(e){console.warn("Update fehlgeschlagen:",e);}
-}
-
-async function loadBakFiles() {
-  const sel = document.getElementById('bakSelect');
-  if (!sel) return;
-  sel.innerHTML = '<option>lade…</option>';
-  try {
-    const res = await fetch('status.php?token=<?= $token ?>&list=bak', { cache: "no-store" });
-    const data = await res.json();
-    sel.innerHTML = data.length
-      ? data.map(f => `<option value="${f}">${f}</option>`).join("")
-      : '<option>(leer)</option>';
-  } catch (e) {
-    sel.innerHTML = '<option>Fehler beim Laden</option>';
-  }
-}
-
-  const clearBtn = document.getElementById('clearBakBtn');
-  if (clearBtn) {
-    clearBtn.addEventListener('click', async () => {
-      if (!confirm("Delete all Replay files")) return;
-      try {
-        const res = await fetch(`status.php?token=<?= $token ?>&action=clearbak`, { cache: "no-store" });
-        const data = await res.json();
-        alert(`🗑️ Deleted ${data.deleted} file(s).`);
-        loadBakFiles();
-      } catch (err) {
-        alert("❌ Error deleting .bak files");
-      }
-    });
-  }
-
-
-document.addEventListener("DOMContentLoaded", () => {
-  const playBtn = document.getElementById('bakPlayBtn');
-  const sel = document.getElementById('bakSelect');
-  if (!playBtn || !sel) return;
-
-  playBtn.addEventListener('click', async () => {
-    const file = sel.value;
-    if (!file || file.startsWith('(')) return;
-
-    console.log('▶️ Replay angefordert:', file);
-    try {
-      const res = await fetch(`status.php?token=<?= $token ?>&action=replay&file=${encodeURIComponent(file)}`, { cache: "no-store" });
-      if (!res.ok) return console.warn('❌ Replay-Request fehlgeschlagen');
-      const data = await res.json();
-      console.log('📦 Replay bereitgestellt als:', data.file);
-    } catch (err) {
-      console.error('⚠️ Fehler beim Replay:', err);
-    }
+    const tf = showTime ? (ago>=60?`${Math.floor(ago/60)}m ${ago%60}s`:`${ago}s`) : "";
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${c.ip}</td><td class="${cls}">${st}</td><td class="${showTime?cls:""}">${tf}</td>`;
+    tbody.appendChild(tr);
   });
+}
 
+async function updateStatus(){
+  try{
+    const res = await fetch(`status.php?token=${token}&mode=json`, {cache:"no-store"});
+    const d = await res.json();
+    document.getElementById('clientCount').textContent = d.clients_count ?? 0;
+    document.getElementById('playState').textContent  = d.paused ? "⏸️ Pausiert" : "▶️ Aktiv";
+    renderClients(d.clients || []);
+  }catch(e){ console.warn(e); }
+}
+
+// ───────── .bak Dropdown flackerfrei aktualisieren
+let lastBakList = [];
+async function loadBakFiles(){
+  const sel = document.getElementById('bakSelect');
+  try{
+    const r = await fetch(`status.php?token=${token}&list=bak`, {cache:"no-store"});
+    let d = await r.json();
+    if(!Array.isArray(d)) d = [];
+    // Sort sicherheitshalber erneut: neueste zuerst
+    d.sort((a,b)=>a<b?1:-1);
+
+    // identisch? -> nichts tun (kein Flackern)
+    if (JSON.stringify(d) === JSON.stringify(lastBakList)) return;
+
+    const prev = sel.value;
+    sel.innerHTML = d.length
+      ? d.map(f=>`<option value="${f}">${f}</option>`).join("")
+      : '<option>(leer)</option>';
+
+    // Auswahl beibehalten, wenn noch vorhanden; sonst erste (neueste)
+    if (d.length){
+      if (d.includes(prev)) sel.value = prev;
+      else sel.selectedIndex = 0;
+    }
+    lastBakList = d;
+  }catch(e){
+    sel.innerHTML = '<option>Fehler</option>';
+  }
+}
+
+// Replay-Button
+document.getElementById('bakPlayBtn').addEventListener('click', async ()=>{
+  const f = document.getElementById('bakSelect').value;
+  if(!f || f.startsWith('(')) return;
+  const r = await fetch(`status.php?token=${token}&action=replay&file=${encodeURIComponent(f)}`, {cache:"no-store"});
+  if (r.ok) {
+    const d = await r.json();
+    console.log("Replay:", d.file);
+    // Nach Replay Liste sanft aktualisieren (Datei wandert aus .bak raus)
+    loadBakFiles();
+  }
+});
+
+// Delete Replay Files
+document.getElementById('clearBakBtn').addEventListener('click', async ()=>{
+  if(!confirm("Delete all Replay files?")) return;
+  const r = await fetch(`status.php?token=${token}&action=clearbak`, {cache:"no-store"});
+  const d = await r.json();
+  alert(`🗑️ Deleted ${d.deleted} file(s).`);
+  lastBakList = []; // Force-Refresh
   loadBakFiles();
 });
 
-setInterval(updateStatus, 1000);
+// ───────── Log flackerfrei
+let lastLogEntries = [];
+async function loadServerLog(){
+  const box = document.getElementById("serverLogBox");
+  try{
+    const res = await fetch(`status.php?token=${token}&action=getlog`, {cache:"no-store"});
+    let data = await res.json();
+    if(!Array.isArray(data) || !data.length){
+      box.innerHTML = "<i>Keine Einträge vorhanden.</i>";
+      lastLogEntries = [];
+      return;
+    }
+    // Neueste oben
+    data.sort((a,b)=> new Date(b.time) - new Date(a.time));
+    const newJson = JSON.stringify(data);
+    if (newJson === JSON.stringify(lastLogEntries)) return; // nichts geändert
+    lastLogEntries = data;
+
+    const oldScroll = box.scrollTop;
+    const atTop = oldScroll === 0;
+
+    function insertBreaks(str) {
+  // 🔠 Fügt <wbr> nach Punkten, Unterstrichen, Bindestrichen ODER nach 40 Zeichen ein
+  return str
+    .replace(/([._-])/g, '$1<wbr>')
+    .replace(/(.{40})/g, '$1<wbr>'); // ✅ Zeilenumbruch nach 40 Zeichen
+}
+
+
+box.innerHTML = data.map(e =>
+  `<div style="white-space:normal;word-break:break-word;overflow-wrap:anywhere;">
+     <b>[${e.time}]</b> ${e.type}: ${insertBreaks(e.filename)}
+   </div>`
+).join("");
+
+
+
+    if (atTop) box.scrollTop = 0; else box.scrollTop = oldScroll;
+  }catch(err){
+    box.innerHTML = "<i>Fehler beim Laden.</i>";
+  }
+}
+async function clearServerLog(){
+  if(!confirm("Wiedergabe-Log wirklich löschen?")) return;
+  await fetch(`status.php?token=${token}&action=clearlog`, {cache:"no-store"});
+  lastLogEntries = [];
+  loadServerLog();
+}
+document.getElementById("clearServerLogBtn").addEventListener("click", clearServerLog);
+
+// ───────── Intervalle
+setInterval(updateStatus,   1000);
+setInterval(loadServerLog,  3000);
+setInterval(loadBakFiles,   4000);
+
 updateStatus();
+loadServerLog();
+loadBakFiles();
 </script>
 </body>
 </html>
