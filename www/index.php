@@ -141,15 +141,28 @@ async function checkForNewTTS() {
 
 setInterval(checkForNewTTS, 1500);
 
-async function heartbeat() {
-  try {
-    await fetch(`/speakerbot/ping?token=${token}&_=${Date.now()}`, { cache: "no-store" });
-  } catch {
-    console.warn("Ping fehlgeschlagen");
+async function startHeartbeat() {
+  while (true) {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 2000);
+
+      await fetch(`/speakerbot/ping?token=${token}&_=${Date.now()}`, {
+        cache: "no-store",
+        signal: controller.signal
+      });
+
+      clearTimeout(timeout);
+    } catch {
+      // Ping-Fehler werden still ignoriert
+    }
+
+    await new Promise(r => setTimeout(r, 5000));
   }
 }
-setInterval(heartbeat, 3000);
-heartbeat();
+startHeartbeat();
+
+
 </script>
 
 </body>
