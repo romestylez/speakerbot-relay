@@ -263,7 +263,7 @@ if (isset($_GET['mode']) && $_GET['mode'] === 'json') {
 
 <div class="controls" style="margin-top:20px;">
   <button id="clearBakBtn" style="background:#f33;color:#fff;border:none;border-radius:6px;padding:8px 16px;cursor:pointer;font-weight:bold;">
-    🗑️ Delete .bak Files
+    🗑️ Delete Replay Files
   </button>
 </div>
 
