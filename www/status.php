@@ -416,7 +416,7 @@ document.getElementById("clearServerLogBtn").addEventListener("click", clearServ
 // ───────── Intervalle
 setInterval(updateStatus,   1000);
 setInterval(loadServerLog,  3000);
-setInterval(loadBakFiles,   4000);
+setInterval(loadBakFiles,   1000);
 
 updateStatus();
 loadServerLog();
