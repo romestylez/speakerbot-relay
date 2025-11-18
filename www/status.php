@@ -138,6 +138,26 @@ if (isset($_GET['mode']) && $_GET['mode'] === 'json') {
     echo json_encode($status);
     exit;
 }
+
+// Status (Text) – für externe Tools / Bots
+if (isset($_GET['mode']) && $_GET['mode'] === 'text') {
+    $clients = $status['clients_count'] ?? 0;
+    $paused  = $status['paused'] ?? false;
+
+    $circle = ($clients > 0 && !$paused) ? "🟢" : "🔴";
+
+    header('Content-Type: text/plain; charset=utf-8');
+
+    if ($clients === 0) {
+        echo "$circle Keine Clients verbunden";
+    } else {
+        echo "$circle {$clients} Client(s) verbunden";
+    }
+    exit;
+}
+
+
+
 ?>
 <!DOCTYPE html>
 <html lang="de">
