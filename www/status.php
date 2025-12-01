@@ -338,8 +338,7 @@ async function loadBakFiles(){
     const r = await fetch(`status.php?token=${token}&list=bak`, {cache:"no-store"});
     let d = await r.json();
     if(!Array.isArray(d)) d = [];
-    // Sort sicherheitshalber erneut: neueste zuerst
-    d.sort((a,b)=>a<b?1:-1);
+    // ⚡ Reihenfolge wie vom Server übernehmen (bereits korrekt sortiert)
 
     // identisch? -> nichts tun (kein Flackern)
     if (JSON.stringify(d) === JSON.stringify(lastBakList)) return;
