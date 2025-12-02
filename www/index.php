@@ -121,7 +121,7 @@ async function playFile(filename) {
   }
 
   // ⛔ Gleiche Datei wie zuletzt → nicht erneut abspielen
-  if (baseStamp === lastFileBase) {
+  if (!filename.startsWith("REPLAY_") && baseStamp === lastFileBase) {
     console.log("⏩ Bereits abgespielt:", filename);
     addLogEntry("Übersprungen", filename);
     return;

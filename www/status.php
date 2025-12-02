@@ -16,28 +16,12 @@ if ($envPath && file_exists($envPath)) {
 // ──────────────────────────────────────────────────────────────
 // Konfiguration
 // ──────────────────────────────────────────────────────────────
-// ──────────────────────────────────────────────────────────────
-// Konfiguration (ohne Fallbacks – alles MUSS in .env stehen)
-// ──────────────────────────────────────────────────────────────
-if (
-    !isset($_ENV['VALID_TOKEN']) ||
-    !isset($_ENV['TTS_FOLDER']) ||
-    !isset($_ENV['STATE_FILE']) ||
-    !isset($_ENV['PORT']) ||
-    !isset($_ENV['CLEANUP_DAYS']) ||
-    !isset($_ENV['CLEANUP_ENABLED'])
-) {
-    http_response_code(500);
-    exit("❌ ERROR: Fehlende Konfiguration in .env");
-}
-
-$validToken     = $_ENV['VALID_TOKEN'];
-$ttsFolder      = rtrim($_ENV['TTS_FOLDER'], '/\\');
-$stateFile      = $_ENV['STATE_FILE'];
-$apiPort        = (int)$_ENV['PORT'];
-$cleanupDays    = (int)$_ENV['CLEANUP_DAYS'];
-$cleanupEnabled = ($_ENV['CLEANUP_ENABLED'] === '1');
-
+$validToken     = $_ENV['VALID_TOKEN']  ?? '';
+$ttsFolder      = rtrim($_ENV['TTS_FOLDER']  ?? 'D:/OBS-LIVE/Tools/TTS-Relay-Server/mp3', '/\\');
+$stateFile      = $_ENV['STATE_FILE']   ?? 'D:/OBS-LIVE/Tools/TTS-Relay-Server/state.json';
+$apiPort        = (int)($_ENV['PORT']   ?? 8773);
+$cleanupDays    = (int)($_ENV['CLEANUP_DAYS'] ?? 1);
+$cleanupEnabled = (($_ENV['CLEANUP_ENABLED'] ?? '1') === '1');
 $logFile        = dirname($ttsFolder) . '/log/tts_log.json';
 
 // ──────────────────────────────────────────────────────────────
@@ -86,24 +70,25 @@ if ($action === 'pause' || $action === 'resume') {
 if ($action === 'replay') {
     $file = basename($_GET['file'] ?? '');
     if (!$file) { http_response_code(400); exit('Missing file'); }
+
     $src = $ttsFolder . "/.bak/" . $file;
     if (!is_file($src)) { http_response_code(404); exit('Not found'); }
-    $dst = $ttsFolder . "/REPLAY_" . $file;
-    if (!@rename($src, $dst)) { http_response_code(500); exit('Move failed'); }
-    header('Content-Type: application/json');
-    echo json_encode(['ok' => true, 'file' => basename($dst)]);
-    exit;
-}
-if ($action === 'clearbak') {
-    $bakDir = $ttsFolder . "/.bak";
-    $deleted = 0;
-    if (is_dir($bakDir)) {
-        foreach (glob($bakDir . "/*", GLOB_NOSORT) as $f) {
-            if (is_file($f)) { @unlink($f); $deleted++; }
-        }
+
+    // ✔ Replay-Datei vorne mit REPLAY_
+    $dstName = "REPLAY_" . $file;
+    $dst = $ttsFolder . "/" . $dstName;
+
+    // Kopieren statt verschieben damit .bak erhalten bleibt
+    if (!@copy($src, $dst)) {
+        http_response_code(500);
+        exit('Could not create replay');
     }
+
+    // optional: sicherstellen dass es die neuste Datei wird
+    @touch($dst, time());
+
     header('Content-Type: application/json');
-    echo json_encode(['ok' => true, 'deleted' => $deleted]);
+    echo json_encode([ 'ok' => true, 'file' => $dstName ]);
     exit;
 }
 
@@ -302,7 +287,16 @@ td { padding:6px 0; }
     <button id="clearBakBtn" style="background:#f33;color:#fff;border:none;border-radius:6px;padding:8px 16px;cursor:pointer;font-weight:bold;">🗑️ Delete Replay Files</button>
   </div>
 
-
+  <!-- Log -->
+  <hr style="margin:25px 0;border-color:#0f0;">
+  <div style="text-align:left;">
+    <div style="display:flex;justify-content:space-between;align-items:center;">
+      <b>📜 Wiedergabe-Log (Server)</b>
+      <button id="clearServerLogBtn" style="background:#333;color:#0f0;border:1px solid #0f0;border-radius:6px;padding:4px 10px;cursor:pointer;">🧹 Log löschen</button>
+    </div>
+    <div id="serverLogBox" class="logbox"><i>Lade Logdaten…</i></div>
+  </div>
+</div>
 
 <script>
 const token = "<?= $token ?>";
@@ -389,12 +383,63 @@ document.getElementById('clearBakBtn').addEventListener('click', async ()=>{
   loadBakFiles();
 });
 
+// ───────── Log flackerfrei
+let lastLogEntries = [];
+async function loadServerLog(){
+  const box = document.getElementById("serverLogBox");
+  try{
+    const res = await fetch(`status.php?token=${token}&action=getlog`, {cache:"no-store"});
+    let data = await res.json();
+    if(!Array.isArray(data) || !data.length){
+      box.innerHTML = "<i>Keine Einträge vorhanden.</i>";
+      lastLogEntries = [];
+      return;
+    }
+    // Neueste oben
+    data.sort((a,b)=> new Date(b.time) - new Date(a.time));
+    const newJson = JSON.stringify(data);
+    if (newJson === JSON.stringify(lastLogEntries)) return; // nichts geändert
+    lastLogEntries = data;
+
+    const oldScroll = box.scrollTop;
+    const atTop = oldScroll === 0;
+
+    function insertBreaks(str) {
+  // 🔠 Fügt <wbr> nach Punkten, Unterstrichen, Bindestrichen ODER nach 40 Zeichen ein
+  return str
+    .replace(/([._-])/g, '$1<wbr>')
+    .replace(/(.{40})/g, '$1<wbr>'); // ✅ Zeilenumbruch nach 40 Zeichen
+}
+
+
+box.innerHTML = data.map(e =>
+  `<div style="white-space:normal;word-break:break-word;overflow-wrap:anywhere;">
+     <b>[${e.time}]</b> ${e.type}: ${insertBreaks(e.filename)}
+   </div>`
+).join("");
+
+
+
+    if (atTop) box.scrollTop = 0; else box.scrollTop = oldScroll;
+  }catch(err){
+    box.innerHTML = "<i>Fehler beim Laden.</i>";
+  }
+}
+async function clearServerLog(){
+  if(!confirm("Wiedergabe-Log wirklich löschen?")) return;
+  await fetch(`status.php?token=${token}&action=clearlog`, {cache:"no-store"});
+  lastLogEntries = [];
+  loadServerLog();
+}
+document.getElementById("clearServerLogBtn").addEventListener("click", clearServerLog);
 
 // ───────── Intervalle
 setInterval(updateStatus,   1000);
+setInterval(loadServerLog,  3000);
 setInterval(loadBakFiles,   1000);
-updateStatus();
 
+updateStatus();
+loadServerLog();
 loadBakFiles();
 </script>
 </body>
