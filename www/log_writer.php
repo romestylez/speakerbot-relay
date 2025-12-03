@@ -1,4 +1,6 @@
 <?php
+date_default_timezone_set('Europe/Berlin');
+
 // log_writer.php — Serverlog für TTS-Aktionen
 header('Content-Type: application/json; charset=utf-8');
 
@@ -34,7 +36,7 @@ if (file_exists($logFile)) {
 array_unshift($log, $entry);
 
 // Max. 200 Einträge behalten
-$log = array_slice($log, 0, 200);
+$log = array_slice($log, 0, 100);
 
 // Datei speichern
 file_put_contents($logFile, json_encode($log, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));

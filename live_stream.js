@@ -67,6 +67,13 @@ app.get("/speakerbot/ping", (req, res) => {
 // 🔊 MP3-Abspielroute → liefert immer die neueste Datei & löscht sie danach
 app.get("/speakerbot", (req, res) => {
   if (req.query.token !== VALID_TOKEN) return res.sendStatus(403);
+
+  // 🛡️ NICHT streamen, wenn KEIN Heartbeat aktiv ist
+  if (connectedCount() === 0) {
+    console.log("🚫 Kein aktiver Client → MP3 wird NICHT gestreamt und NICHT verschoben.");
+    return res.status(503).send("No active clients");
+  }
+
   const ip = getClientId(req);
 
   try {
