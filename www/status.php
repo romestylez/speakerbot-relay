@@ -93,6 +93,24 @@ if ($action === 'replay') {
 }
 
 // ──────────────────────────────
+// Replay-Files löschen
+// ──────────────────────────────
+if ($action === 'clearbak') {
+    $bakDir = $ttsFolder . "/.bak";
+    $deleted = 0;
+
+    if (is_dir($bakDir)) {
+        foreach (glob($bakDir . "/*.{mp3,wav}", GLOB_BRACE) as $f) {
+            if (@unlink($f)) $deleted++;
+        }
+    }
+
+    header('Content-Type: application/json');
+    echo json_encode(['ok' => true, 'deleted' => $deleted]);
+    exit;
+}
+
+// ──────────────────────────────
 // Node-Status laden
 // ──────────────────────────────
 $apiUrl = "http://127.0.0.1:{$apiPort}/speakerbot/status?token=$token";
