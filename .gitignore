@@ -4,4 +4,3 @@ package.json
 /log
 /mp3
 .env
-*.ps1
