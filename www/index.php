@@ -49,6 +49,10 @@ const token = "<?= $validToken ?>";
 
 let lastFile = "";
 let lastFileBase = "";
+
+// 🔒 Historie aller bereits gestarteten TTS (Session-sicher)
+const playedBases = new Set();
+
 let isPlaying = false;
 let cooldown = false;
 let ctx = null;
@@ -120,17 +124,18 @@ async function playFile(filename) {
     return;
   }
 
-  // ⛔ Gleiche Datei wie zuletzt → nicht erneut abspielen
-  if (!filename.startsWith("REPLAY_") && baseStamp === lastFileBase) {
-    console.log("⏩ Bereits abgespielt:", filename);
-    addLogEntry("Übersprungen", filename);
-    return;
-  }
+  // ⛔ Bereits in dieser Session abgespielt → niemals erneut
+if (!filename.startsWith("REPLAY_") && playedBases.has(baseStamp)) {
+  console.log("⏩ Bereits abgespielt (Session):", filename);
+  addLogEntry("Übersprungen", filename);
+  return;
+}
+
 
   isPlaying = true;
   lastFile = filename;
   lastFileBase = baseStamp;
-
+  playedBases.add(baseStamp); // 🔒 sofort sperren → verhindert Race-Conditions
   console.log("▶️ Starte Wiedergabe:", filename);
   addLogEntry("Spiele ab", filename);
 

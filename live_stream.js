@@ -77,10 +77,17 @@ app.get("/speakerbot", (req, res) => {
   const ip = getClientId(req);
 
   try {
-    const mp3s = fs.readdirSync(ttsFolder)
-      .filter(f => /\.(mp3|wav)$/i.test(f))
-      .map(f => ({ f, t: fs.statSync(path.join(ttsFolder, f)).mtimeMs }))
-      .sort((a, b) => b.t - a.t);
+    const mp3s = fs.readdirSync(ttsFolder, { withFileTypes: true })
+  .filter(d =>
+    d.isFile() &&                    // 🔒 NUR Dateien
+    /\.(mp3|wav)$/i.test(d.name)     // 🔒 NUR mp3 / wav
+  )
+  .map(d => ({
+    f: d.name,
+    t: fs.statSync(path.join(ttsFolder, d.name)).mtimeMs
+  }))
+  .sort((a, b) => b.t - a.t);
+
 
     if (!mp3s.length) return res.status(404).send("No MP3 files found");
 
@@ -158,7 +165,12 @@ app.get("/speakerbot/status", (req, res) => {
   try {
     // Nur Dateien mit Endung .mp3 und .wav (keine .playing)
 const files = fs.readdirSync(ttsFolder)
-  .filter(f => /\.(mp3|wav)$/i.test(f) && !f.includes(".lock"))
+  .filter(f =>
+    /\.(mp3|wav)$/i.test(f) &&         // nur mp3/wav
+    !f.includes(".lock") &&            // keine .lock files
+    !fs.statSync(path.join(ttsFolder, f)).isDirectory()  // ❗ .bak und alle Ordner ausschließen
+  )
+
   .map(f => ({ f, t: fs.statSync(path.join(ttsFolder, f)).mtimeMs }))
   .sort((a, b) => b.t - a.t);
 
