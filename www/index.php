@@ -169,7 +169,7 @@ if (!filename.startsWith("REPLAY_") && playedBases.has(baseStamp)) {
       setTimeout(() => cooldown = false, 1000); // 1s Cooldown
     };
 
-    src.start(0);
+    src.start(ctx.currentTime + 0.05, 0.08);
   } catch (err) {
     console.warn("❌ Wiedergabefehler:", err);
     addLogEntry("Fehler", filename);
